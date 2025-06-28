@@ -1,0 +1,13 @@
+{
+  "author": "Tim Dodd",
+  "gitHubUrl": "https://github.com/timothydodd",
+  "packages": [
+    {
+      "id": "9c85b00b-b57f-47e8-bf3a-8b01692a0377",
+      "name": "WLED Mqtt Driver",
+      "category": "Integrations",
+      "location": "https://raw.githubusercontent.com/timothydodd/hubitat-wled-mqtt/main/packageManifest.json",
+      "description": "A device driver that integrates WLED sensors via MQTT"
+    }
+  ]
+}

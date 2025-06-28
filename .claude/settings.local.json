@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.hubitat.com)",
+      "WebFetch(domain:kno.wled.ge)"
+    ],
+    "deny": []
+  }
+}
