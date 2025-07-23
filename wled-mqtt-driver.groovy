@@ -12,7 +12,7 @@
  * - All WLED effects with speed and intensity control
  * - Color palettes and presets (fully implemented)
  * - Multi-segment support
- * - Modern JSON API (recommended) with legacy XML support
+ * - XML API support via MQTT
  * - Auto-discovery of effects and palettes via HTTP API
  * - Robust error handling and reconnection logic
  * - Authentication support for secure MQTT brokers
@@ -27,8 +27,7 @@
  * 1. Configure MQTT broker settings
  * 2. Set WLED MQTT topic (typically "wled/[device-name]")
  * 3. Optionally set WLED IP for HTTP API discovery (IP only, no http://)
- * 4. Enable JSON API for full features (recommended)
- * 5. Run "Configure" to auto-discover effects and palettes
+ * 4. Run "Configure" to auto-discover effects and palettes
  *
  * FEATURES:
  * - Switch: on(), off()
@@ -98,7 +97,6 @@ preferences {
     }
     section("WLED Configuration") {
         input "wledIP", "string", title: "WLED IP Address", required: false, description: "Enter IP address only (e.g. 192.168.1.50) - do NOT include http:// or paths"
-        input "useJsonApi", "bool", title: "Use JSON API (recommended)", defaultValue: true, description: "Use modern JSON API instead of legacy XML"
         input "autoRefresh", "number", title: "Auto-refresh interval (seconds)", defaultValue: 30, range: "10..300"
     }
     section("Advanced Settings") {
@@ -112,7 +110,6 @@ def installed() {
     log.info "WLED MQTT Driver v2.0.0 installed"
     
     // Set default values
-    device.updateSetting("useJsonApi", true)
     device.updateSetting("autoRefresh", 30)
     device.updateSetting("maxSegments", 16)
     device.updateSetting("transitionTime", 700)
@@ -297,107 +294,16 @@ def parse(String description) {
     def mqtt = interfaces.mqtt.parseMessage(description) 
     logDebug "Received MQTT: ${mqtt.topic} = ${mqtt.payload}"
     
-    def data
     try {
-        if (settings.useJsonApi) {
-            data = new groovy.json.JsonSlurper().parseText(mqtt.payload)
-            parseJsonResponse(data)
-        } else {
-            def xml = new XmlSlurper().parseText(mqtt.payload)
-            data = xmlToMap(xml)
-            parseXmlResponse(data)
-        }
+        def xml = new XmlSlurper().parseText(mqtt.payload)
+        def data = xmlToMap(xml)
+        parseXmlResponse(data)
     } catch (Exception e) {
         log.error "Failed to parse MQTT payload: ${e.message}"
         logDebug "Payload was: ${mqtt.payload}"
     }
 }
 
-def parseJsonResponse(data) {
-    logDebug "Parsing JSON response: ${data}"
-    
-    // Handle WLED JSON state format
-    if (data.state) {
-        def state = data.state
-        
-        // Update switch and brightness
-        def isOn = state.on ?: false
-        sendEvent(name: "switch", value: isOn ? "on" : "off")
-        
-        if (state.bri != null) {
-            def level = Math.round(state.bri / 255 * 100)
-            if (level != device.currentValue("level")) {
-                sendEvent(name: "level", value: level, unit: "%", isStateChange: true)
-            }
-        }
-        
-        // Handle segments (first segment for basic color control)
-        if (state.seg && state.seg.size() > 0) {
-            def seg = state.seg[0]
-            
-            // Update colors
-            if (seg.col && seg.col.size() > 0 && seg.col[0].size() >= 3) {
-                def rgb = seg.col[0]
-                def hsv = hubitat.helper.ColorUtils.rgbToHSV([rgb[0], rgb[1], rgb[2]])
-                
-                if (hsv[0] != device.currentValue("hue")) {
-                    sendEvent(name: "hue", value: hsv[0])
-                    setGenericName(hsv[0])
-                }
-                if (hsv[1] != device.currentValue("saturation")) {
-                    sendEvent(name: "saturation", value: hsv[1], unit: "%")
-                }
-                
-                def colorMap = [hue: hsv[0], saturation: hsv[1], level: hsv[2]]
-                sendEvent(name: "color", value: colorMap)
-            }
-            
-            // Update effect
-            if (seg.fx != null && seg.fx != device.currentValue("effectNumber")) {
-                def effectName = state.effects ? state.effects[seg.fx] : "Effect ${seg.fx}"
-                sendEvent(name: "effectNumber", value: seg.fx)
-                sendEvent(name: "effectName", value: effectName)
-            }
-            
-            // Update effect speed and intensity
-            if (seg.sx != null && seg.sx != device.currentValue("effectSpeed")) {
-                sendEvent(name: "effectSpeed", value: seg.sx)
-            }
-            if (seg.ix != null && seg.ix != device.currentValue("effectIntensity")) {
-                sendEvent(name: "effectIntensity", value: seg.ix)
-            }
-            
-            // Update palette
-            if (seg.pal != null && seg.pal != device.currentValue("paletteNumber")) {
-                def paletteName = state.palettes ? state.palettes[seg.pal] : "Palette ${seg.pal}"
-                sendEvent(name: "paletteNumber", value: seg.pal)
-                sendEvent(name: "paletteName", value: paletteName)
-            }
-        }
-        
-        // Update preset
-        if (state.ps != null && state.ps >= 0) {
-            sendEvent(name: "preset", value: state.ps)
-        }
-        
-        // Update transition time
-        if (state.transition != null) {
-            sendEvent(name: "transition", value: state.transition)
-        }
-    }
-    
-    // Store segments info
-    if (data.state?.seg) {
-        sendEvent(name: "segments", value: new groovy.json.JsonBuilder(data.state.seg).toString())
-    }
-    
-    // Store device info
-    if (data.info) {
-        sendEvent(name: "wledInfo", value: new groovy.json.JsonBuilder(data.info).toString())
-        state.ver = data.info.ver
-        state.name = data.info.name
-    }
-}
 
 def parseXmlResponse(map) {
     logDebug "Parsing XML response: ${map}"
@@ -415,7 +321,8 @@ def parseXmlResponse(map) {
     
     // Update colors from XML
     if (map.cl && map.cl.size() >= 3) {
-        def primaryColor = hubitat.helper.ColorUtils.rgbToHSV(map.cl)
+        def rgb = [map.cl[0].toInteger(), map.cl[1].toInteger(), map.cl[2].toInteger()]
+        def primaryColor = hubitat.helper.ColorUtils.rgbToHSV(rgb)
         if (primaryColor[0] != device.currentValue("hue")) {
             sendEvent(name: "hue", value: primaryColor[0])
             setGenericName(primaryColor[0])
@@ -466,22 +373,12 @@ def parseXmlResponse(map) {
 
 def on() {
     logInfo "on"
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([on: true])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "T=1"
-    }
+    publishXmlCommand "T=1"
 }
 
 def off() {
     logInfo "off"
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([on: false])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "T=0"
-    }
+    publishXmlCommand "T=0"
 }
 
 def setEffect(String effect){
@@ -496,48 +393,21 @@ def setEffect(String effect){
 
 def setEffect(id){
     logInfo "setEffect $id"
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([
-            seg: [[
-                fx: id.toInteger()
-            ]]
-        ])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "FX=${id}"
-    }
+    publishXmlCommand "FX=${id}"
     sendEvent(name: "effectNumber", value: id.toInteger())
 } 
 
 def setEffectSpeed(speed){
     logInfo "setEffectSpeed $speed"
     def speedValue = Math.max(0, Math.min(255, speed.toInteger()))
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([
-            seg: [[
-                sx: speedValue
-            ]]
-        ])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "SX=${speedValue}"
-    }
+    publishXmlCommand "SX=${speedValue}"
     sendEvent(name: "effectSpeed", value: speedValue)
 } 
 
 def setEffectIntensity(intensity){
     logInfo "setEffectIntensity $intensity"
     def intensityValue = Math.max(0, Math.min(255, intensity.toInteger()))
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([
-            seg: [[
-                ix: intensityValue
-            ]]
-        ])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "IX=${intensityValue}"
-    }
+    publishXmlCommand "IX=${intensityValue}"
     sendEvent(name: "effectIntensity", value: intensityValue)
 } 
 
@@ -564,12 +434,7 @@ def setPreviousEffect(){
 def setPreset(preset){
     logInfo "setPreset $preset"
     def presetNum = preset.toInteger()
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([ps: presetNum])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "PL=${presetNum}"
-    }
+    publishXmlCommand "PL=${presetNum}"
     sendEvent(name: "preset", value: presetNum)
 } 
 
@@ -581,16 +446,7 @@ def setColor(value) {
     
     def rgb = hubitat.helper.ColorUtils.hsvToRGB([hue, saturation, level])
     
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([
-            seg: [[
-                col: [[rgb[0], rgb[1], rgb[2]]]
-            ]]
-        ])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "R=${rgb[0]}&G=${rgb[1]}&B=${rgb[2]}"
-    }
+    publishXmlCommand "T=1&R=${rgb[0]}&G=${rgb[1]}&B=${rgb[2]}"
     
     // Update device attributes
     sendEvent(name: "hue", value: hue)
@@ -623,28 +479,14 @@ def setColorTemperature(colortemperature, level = null, transitionTime = null) {
     def mireds = Math.round(1000000 / ct)
     def wledCt = Math.round(mireds / 50)
     
-    if (settings.useJsonApi) {
-        def jsonData = [seg: [[cct: wledCt]]]
-        
-        if (level != null) {
-            jsonData.bri = Math.round(level * 2.55)
-        }
-        if (transitionTime != null) {
-            jsonData.transition = Math.round(transitionTime * 10)
-        }
-        
-        def json = new groovy.json.JsonBuilder(jsonData)
-        publishJsonCommand(json.toString())
-    } else {
-        def command = "CT=${wledCt}"
-        if (level != null) {
-            command += "&A=${Math.round(level * 2.55)}"
-        }
-        if (transitionTime != null) {
-            command += "&TT=${Math.round(transitionTime * 10)}"
-        }
-        publishXmlCommand(command)
+    def command = "CT=${wledCt}"
+    if (level != null) {
+        command += "&A=${Math.round(level * 2.55)}"
     }
+    if (transitionTime != null) {
+        command += "&TT=${Math.round(transitionTime * 10)}"
+    }
+    publishXmlCommand(command)
     
     sendEvent(name: "colorTemperature", value: ct)
     sendEvent(name: "colorName", value: getColorTempName(ct))
@@ -661,24 +503,14 @@ def getColorTempName(temp) {
 def setLevel(value) {
     logInfo "setLevel $value"
     def brightness = Math.round(value * 2.55)
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([bri: brightness])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "A=${brightness}"
-    }
+    publishXmlCommand "A=${brightness}"
 }
 
 def setLevel(value, duration) {
     logInfo "setLevel $value over ${duration}s"
     def brightness = Math.round(value * 2.55)
     def transitionTime = Math.round((duration ?: settings.transitionTime ?: 700) / 100)
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([bri: brightness, transition: transitionTime])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "A=${brightness}&TT=${transitionTime}"
-    }
+    publishXmlCommand "A=${brightness}&TT=${transitionTime}"
 }
 def setPalette(String palette){
     logInfo "setPalette $palette"
@@ -693,16 +525,7 @@ def setPalette(String palette){
 def setPalette(id){
     logInfo "setPalette $id"
     def paletteId = id.toInteger()
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([
-            seg: [[
-                pal: paletteId
-            ]]
-        ])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "FP=${paletteId}"
-    }
+    publishXmlCommand "FP=${paletteId}"
     sendEvent(name: "paletteNumber", value: paletteId)
 }
 
@@ -724,43 +547,17 @@ def setSegmentColor(segment, color) {
         rgb = color.split(",").collect { it.toInteger() }
     }
     
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([
-            seg: [
-                [id: segId, col: [[rgb[0], rgb[1], rgb[2]]]]
-            ]
-        ])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "SM=${segId}&R=${rgb[0]}&G=${rgb[1]}&B=${rgb[2]}"
-    }
+    publishXmlCommand "SM=${segId}&R=${rgb[0]}&G=${rgb[1]}&B=${rgb[2]}"
 }
 
 def setTransition(duration) {
     logInfo "setTransition $duration seconds"
     def transMs = Math.round(duration.toInteger() * 1000)
-    if (settings.useJsonApi) {
-        def json = new groovy.json.JsonBuilder([transition: transMs])
-        publishJsonCommand(json.toString())
-    } else {
-        publishXmlCommand "TT=${transMs}"
-    }
+    publishXmlCommand "TT=${transMs}"
     sendEvent(name: "transition", value: transMs)
 } 
 
-def publishCommand(command) {
-    if (settings.useJsonApi) {
-        publishJsonCommand(command)
-    } else {
-        publishXmlCommand(command)
-    }
-}
 
-def publishJsonCommand(jsonData) {
-    def topic = settings.mqttTopic
-    logDebug "Publishing JSON to ${topic}: ${jsonData}"
-    interfaces.mqtt.publish(topic, jsonData)
-}
 
 def publishXmlCommand(command) {
     def topic = settings.mqttTopic + "/api"
@@ -816,20 +613,14 @@ def requestUpdate() {
     }
     
     try {
-        if (settings.useJsonApi) {
-            // Request current state via MQTT
-            def json = new groovy.json.JsonBuilder([state: true])
-            publishJsonCommand(json.toString())
-        } else {
-            // For XML mode, request via HTTP API if IP is configured
-            if (settings.wledIP) {
-                def getParams = [
-                    uri: "http://${settings.wledIP}/json",
-                    requestContentType: 'application/json',
-                    contentType: 'application/json'
-                ]
-                asynchttpGet('processRefreshResponse', getParams)
-            }
+        // Request via HTTP API if IP is configured
+        if (settings.wledIP) {
+            def getParams = [
+                uri: "http://${settings.wledIP}/json",
+                requestContentType: 'application/json',
+                contentType: 'application/json'
+            ]
+            asynchttpGet('processRefreshResponse', getParams)
         }
         
         // Schedule next refresh
@@ -842,11 +633,41 @@ def requestUpdate() {
     }
 }
 
+def buildXmlFromJson(state) {
+    // Convert JSON state to XML format that matches WLED's XML API response
+    def brightness = state.bri ?: 0
+    def rgb = [0, 0, 0]
+    def fx = 0
+    def sx = 128
+    def ix = 128
+    def fp = 0
+    
+    // Extract first segment color if available
+    if (state.seg && state.seg.size() > 0) {
+        def seg = state.seg[0]
+        if (seg.col && seg.col.size() > 0 && seg.col[0].size() >= 3) {
+            rgb = seg.col[0]
+        }
+        fx = seg.fx ?: 0
+        sx = seg.sx ?: 128
+        ix = seg.ix ?: 128
+        fp = seg.pal ?: 0
+    }
+    
+    return "<vs><ac>${brightness}</ac><cl>${rgb[0]}</cl><cl>${rgb[1]}</cl><cl>${rgb[2]}</cl><fx>${fx}</fx><sx>${sx}</sx><ix>${ix}</ix><fp>${fp}</fp></vs>"
+}
+
 def processRefreshResponse(response, data) {
     if (response.getStatus() == 200) {
         try {
             def json = new groovy.json.JsonSlurper().parseText(response.data)
-            parseJsonResponse(json)
+            // Convert JSON state to XML format for parsing
+            if (json.state) {
+                def xmlPayload = buildXmlFromJson(json.state)
+                def xml = new XmlSlurper().parseText(xmlPayload)
+                def xmlData = xmlToMap(xml)
+                parseXmlResponse(xmlData)
+            }
         } catch(e) {
             log.error "Error processing refresh response: ${e.message}"
         }
@@ -868,11 +689,7 @@ def disconnect() {
     if (state.connected) {
         log.info "Disconnecting from MQTT"
         try {
-            if (settings.useJsonApi) {
-                interfaces.mqtt.unsubscribe(settings.mqttTopic + "/state")
-            } else {
-                interfaces.mqtt.unsubscribe(settings.mqttTopic + "/v")
-            }
+            interfaces.mqtt.unsubscribe(settings.mqttTopic + "/v")
             interfaces.mqtt.disconnect()
         } catch(e) {
             logDebug "Error during disconnect: ${e.message}"
@@ -925,15 +742,9 @@ def connect() {
 
 def subscribe() {
     try {
-        if (settings.useJsonApi) {
-            // Subscribe to JSON state topic
-            interfaces.mqtt.subscribe(settings.mqttTopic + "/state")
-            logDebug "Subscribed to JSON topic ${settings.mqttTopic}/state"
-        } else {
-            // Subscribe to XML topic (legacy)
-            interfaces.mqtt.subscribe(settings.mqttTopic + "/v")
-            logDebug "Subscribed to XML topic ${settings.mqttTopic}/v"
-        }
+        // Subscribe to XML topic
+        interfaces.mqtt.subscribe(settings.mqttTopic + "/v")
+        logDebug "Subscribed to XML topic ${settings.mqttTopic}/v"
         
         state.connected = true
         state.lastConnected = now()
