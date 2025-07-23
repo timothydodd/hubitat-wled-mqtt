@@ -1,7 +1,7 @@
 /*
  * WLED MQTT Light Driver - Enhanced Version
  *  Device Driver for Hubitat Elevation hub
- *  Version 2.0.0
+ *  Version 2.0.1
  *
  * Based on the original WLED MQTT Light driver by Mikhail Diatchenko
  * Original: https://github.com/muxa/hubitat/blob/master/drivers/wled-light.groovy
@@ -62,7 +62,7 @@ metadata {
         capability "LightEffects"
         capability "ColorControl"
         capability "ColorTemperature"
-		
+        
         command "on"
         command "off"
         command "setEffect", [[name: "Effect Name *", type: "STRING"]]
@@ -81,6 +81,7 @@ metadata {
         attribute "effectIntensity", "number"
         attribute "paletteNumber", "number"
         attribute "paletteName", "string"
+        attribute "lightPalettes", "string"
         attribute "preset", "number"
         attribute "transition", "number"
         attribute "segments", "string"
@@ -287,6 +288,14 @@ def configurePalettes(palettes) {
     
     state.palettes = palettes
     
+    def paletteMap = [:]
+    palettes.eachWithIndex { element, index ->
+        paletteMap[(index)] = element
+    }
+    
+    def lightPalettesJson = new groovy.json.JsonBuilder(paletteMap)
+    sendEvent(name: "lightPalettes", value: lightPalettesJson.toString())
+    
     logInfo "Configured ${palettes.size()} palettes"
 }
 
@@ -393,8 +402,13 @@ def setEffect(String effect){
 
 def setEffect(id){
     logInfo "setEffect $id"
-    publishXmlCommand "FX=${id}"
-    sendEvent(name: "effectNumber", value: id.toInteger())
+    def effectId = id.toInteger()
+    publishXmlCommand "FX=${effectId}"
+    sendEvent(name: "effectNumber", value: effectId)
+    
+    // Set effect name if available
+    def effectName = state.effects ? state.effects[effectId] : "Effect ${effectId}"
+    sendEvent(name: "effectName", value: effectName)
 } 
 
 def setEffectSpeed(speed){
@@ -527,6 +541,10 @@ def setPalette(id){
     def paletteId = id.toInteger()
     publishXmlCommand "FP=${paletteId}"
     sendEvent(name: "paletteNumber", value: paletteId)
+    
+    // Set palette name if available
+    def paletteName = state.palettes ? state.palettes[paletteId] : "Palette ${paletteId}"
+    sendEvent(name: "paletteName", value: paletteName)
 }
 
 def setSegmentColor(segment, color) {
