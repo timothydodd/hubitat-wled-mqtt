@@ -1,11 +1,17 @@
 /*
  * WLED MQTT Light Driver - Enhanced Version
  *  Device Driver for Hubitat Elevation hub
- *  Version 2.0.1
+ *  Version 2.0.2
  *
  * Based on the original WLED MQTT Light driver by Mikhail Diatchenko
  * Original: https://github.com/muxa/hubitat/blob/master/drivers/wled-light.groovy
  * Enhanced and refactored by Tim Dodd
+ *
+ * CHANGELOG:
+ * 2.0.2 - Fixed on/off state detection: now uses explicit 'on' field from WLED API
+ *         instead of inferring from brightness (device no longer shows as ON when off)
+ *       - Disabled auto-refresh by default (set to 0); only refreshes once on initialize
+ *       - Auto-refresh can still be enabled by setting interval > 0 in preferences
  *
  * ENHANCEMENTS FROM ORIGINAL:
  * - Complete color control (RGB, HSV, Color Temperature)
@@ -98,7 +104,7 @@ preferences {
     }
     section("WLED Configuration") {
         input "wledIP", "string", title: "WLED IP Address", required: false, description: "Enter IP address only (e.g. 192.168.1.50) - do NOT include http:// or paths"
-        input "autoRefresh", "number", title: "Auto-refresh interval (seconds)", defaultValue: 30, range: "10..300"
+        input "autoRefresh", "number", title: "Auto-refresh interval (seconds, 0 to disable)", defaultValue: 0, range: "0..300"
     }
     section("Advanced Settings") {
         input "maxSegments", "number", title: "Maximum segments", defaultValue: 16, range: "1..32"
@@ -108,10 +114,10 @@ preferences {
 }
 
 def installed() {
-    log.info "WLED MQTT Driver v2.0.0 installed"
+    log.info "WLED MQTT Driver v2.0.2 installed"
     
     // Set default values
-    device.updateSetting("autoRefresh", 30)
+    device.updateSetting("autoRefresh", 0)
     device.updateSetting("maxSegments", 16)
     device.updateSetting("transitionTime", 700)
     device.updateSetting("logEnable", true)
@@ -316,14 +322,22 @@ def parse(String description) {
 
 def parseXmlResponse(map) {
     logDebug "Parsing XML response: ${map}"
-    
-    // Legacy XML parsing (original code, uncommented and fixed)
-    def level = Math.round(map.ac.toInteger() / 255 * 100)
-    if (level > 0) {
-        sendEvent(name: "switch", value: "on")
+
+    // Determine on/off state - use explicit 'on' field if available, otherwise fall back to brightness
+    def isOn = false
+    if (map.on != null) {
+        isOn = map.on.toInteger() == 1
     } else {
-        sendEvent(name: "switch", value: "off")
+        // Fallback for MQTT XML responses that may not include 'on' field
+        isOn = map.ac.toInteger() > 0
     }
+
+    def switchValue = isOn ? "on" : "off"
+    if (switchValue != device.currentValue("switch")) {
+        sendEvent(name: "switch", value: switchValue)
+    }
+
+    def level = Math.round(map.ac.toInteger() / 255 * 100)
     if (level != device.currentValue("level")) {
         sendEvent(name: "level", value: level, unit: "%", isStateChange: true)
     }
@@ -518,6 +532,7 @@ def setLevel(value) {
     logInfo "setLevel $value"
     def brightness = Math.round(value * 2.55)
     publishXmlCommand "A=${brightness}"
+    sendEvent(name: "level", value: value, unit: "%")
 }
 
 def setLevel(value, duration) {
@@ -525,6 +540,7 @@ def setLevel(value, duration) {
     def brightness = Math.round(value * 2.55)
     def transitionTime = Math.round((duration ?: settings.transitionTime ?: 700) / 100)
     publishXmlCommand "A=${brightness}&TT=${transitionTime}"
+    sendEvent(name: "level", value: value, unit: "%")
 }
 def setPalette(String palette){
     logInfo "setPalette $palette"
@@ -653,13 +669,14 @@ def requestUpdate() {
 
 def buildXmlFromJson(state) {
     // Convert JSON state to XML format that matches WLED's XML API response
+    def isOn = state.on ? 1 : 0
     def brightness = state.bri ?: 0
     def rgb = [0, 0, 0]
     def fx = 0
     def sx = 128
     def ix = 128
     def fp = 0
-    
+
     // Extract first segment color if available
     if (state.seg && state.seg.size() > 0) {
         def seg = state.seg[0]
@@ -671,8 +688,8 @@ def buildXmlFromJson(state) {
         ix = seg.ix ?: 128
         fp = seg.pal ?: 0
     }
-    
-    return "<vs><ac>${brightness}</ac><cl>${rgb[0]}</cl><cl>${rgb[1]}</cl><cl>${rgb[2]}</cl><fx>${fx}</fx><sx>${sx}</sx><ix>${ix}</ix><fp>${fp}</fp></vs>"
+
+    return "<vs><on>${isOn}</on><ac>${brightness}</ac><cl>${rgb[0]}</cl><cl>${rgb[1]}</cl><cl>${rgb[2]}</cl><fx>${fx}</fx><sx>${sx}</sx><ix>${ix}</ix><fp>${fp}</fp></vs>"
 }
 
 def processRefreshResponse(response, data) {
@@ -763,17 +780,17 @@ def subscribe() {
         // Subscribe to XML topic
         interfaces.mqtt.subscribe(settings.mqttTopic + "/v")
         logDebug "Subscribed to XML topic ${settings.mqttTopic}/v"
-        
+
         state.connected = true
         state.lastConnected = now()
         state.connectionAttempts = 0
         state.delay = 0
-        
-        // Schedule periodic refresh if enabled
-        if (settings.autoRefresh && settings.autoRefresh > 0) {
-            runIn(settings.autoRefresh, requestUpdate)
+
+        // Do one-time refresh on connection to get current state
+        if (settings.wledIP) {
+            runIn(2, requestUpdate)
         }
-        
+
     } catch(e) {
         log.error "MQTT Subscribe error: ${e.message}"
         state.lastError = e.message
