@@ -1,5 +1,5 @@
 /*
- * WLED MQTT Light Driver - Enhanced Version
+ * WLED MQTT LED Driver Plus
  *  Device Driver for Hubitat Elevation hub
  *  Version 2.0.2
  *

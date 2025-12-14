@@ -1,17 +1,17 @@
 {
-  "packageName": "AcuRite Temperature Sensor Mqtt Driver",
+  "packageName": "WLED MQTT LED Driver Plus",
   "author": "Tim Dodd",
-  "version": "1.1",
+  "version": "2.0.2",
   "minimumHEVersion": "2.1.9",
-  "dateReleased": "2024-09-05",
+  "dateReleased": "2025-12-14",
   "drivers": [
     {
-      "id": "de325ef8-ab84-4b8c-904f-9507f4352c48",
-      "name": "Acurite MQTT",
+      "id": "3dfe5872-7b9f-410d-aebe-32207d2e7794",
+      "name": "WLED MQTT LED Driver Plus",
       "namespace": "dodd",
-      "location": "https://raw.githubusercontent.com/timothydodd/hubitat-acurite-mqtt/main/acurite-mqtt-driver.groovy",
+      "location": "https://raw.githubusercontent.com/timothydodd/hubitat-wled-mqtt/master/wled-mqtt-driver.groovy",
       "required": true,
-      "version": "1.1"
+      "version": "2.0.2"
     }
   ]
 }
